@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 
@@ -15,9 +16,20 @@ class DatabaseHelper {
   }
 
   Future<Database> _initDB(String filePath) async {
-    final dbPath = await getDatabasesPath();
-    final path = p.join(dbPath, filePath);
-    // Increment version to trigger onUpgrade
+    String path;
+    if (Platform.isWindows) {
+      // In Windows, when installed in Program Files, we must use a writable directory
+      final String localAppData =
+          Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path;
+      final String dbDirectory = p.join(localAppData, 'GastosDuQuen');
+      // Create directory if it doesn't exist
+      await Directory(dbDirectory).create(recursive: true);
+      path = p.join(dbDirectory, filePath);
+    } else {
+      final dbPath = await getDatabasesPath();
+      path = p.join(dbPath, filePath);
+    }
+
     return await openDatabase(
       path,
       version: 3,

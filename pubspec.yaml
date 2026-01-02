@@ -20,6 +20,8 @@ dependencies:
   printing: ^5.14.2
   flutter_dotenv: ^6.0.0
   flutter_launcher_icons: ^0.14.4
+  sqflite_common_ffi: ^2.4.0+1
+  sqlite3_flutter_libs: ^0.5.41
 
 dev_dependencies:
   flutter_test:
