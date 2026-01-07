@@ -4,6 +4,7 @@ class Expense {
   final double amount;
   final String date;
   final int userId;
+  final int? dailyRegisterId;
   final int isSynced;
   final int? supabaseId;
   final int isDeleted;
@@ -14,6 +15,7 @@ class Expense {
     required this.amount,
     required this.date,
     required this.userId,
+    this.dailyRegisterId,
     this.isSynced = 0,
     this.supabaseId,
     this.isDeleted = 0,
@@ -26,6 +28,7 @@ class Expense {
       amount: (map['amount'] as num).toDouble(),
       date: map['date'],
       userId: map['user_id'],
+      dailyRegisterId: map['daily_register_id'],
       isSynced: map['is_synced'] ?? 0,
       supabaseId: map['supabase_id'],
       isDeleted: map['is_deleted'] ?? 0,
@@ -39,6 +42,7 @@ class Expense {
       'amount': amount,
       'date': date,
       'user_id': userId,
+      'daily_register_id': dailyRegisterId,
       'is_synced': isSynced,
       'supabase_id': supabaseId,
       'is_deleted': isDeleted,

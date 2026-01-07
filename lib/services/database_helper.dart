@@ -32,7 +32,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 5,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -46,6 +46,7 @@ class DatabaseHelper {
       amount REAL NOT NULL,
       date TEXT NOT NULL,
       user_id INTEGER NOT NULL,
+      daily_register_id INTEGER,
       is_synced INTEGER DEFAULT 0,
       supabase_id INTEGER,
       is_deleted INTEGER DEFAULT 0
@@ -65,7 +66,23 @@ class DatabaseHelper {
       user_id INTEGER NOT NULL,
       month INTEGER NOT NULL,
       year INTEGER NOT NULL,
-      amount REAL NOT NULL
+      amount REAL NOT NULL,
+      is_synced INTEGER DEFAULT 0,
+      supabase_id INTEGER
+    )
+    ''');
+
+    await db.execute('''
+    CREATE TABLE daily_registers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      opened_at TEXT NOT NULL,
+      closed_at TEXT,
+      initial_amount REAL NOT NULL DEFAULT 0,
+      final_amount REAL,
+      status TEXT NOT NULL DEFAULT 'open',
+      is_synced INTEGER DEFAULT 0,
+      supabase_id INTEGER
     )
     ''');
   }
@@ -86,6 +103,37 @@ class DatabaseHelper {
         amount REAL NOT NULL
       )
       ''');
+    }
+    if (oldVersion < 4) {
+      await db.execute(
+        'ALTER TABLE expenses ADD COLUMN daily_register_id INTEGER',
+      );
+      await db.execute('''
+      CREATE TABLE daily_registers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        opened_at TEXT NOT NULL,
+        closed_at TEXT,
+        initial_amount REAL NOT NULL DEFAULT 0,
+        final_amount REAL,
+        status TEXT NOT NULL DEFAULT 'open'
+      )
+      ''');
+    }
+    if (oldVersion < 5) {
+      // Add sync columns to existing tables
+      await db.execute(
+        'ALTER TABLE daily_registers ADD COLUMN is_synced INTEGER DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE daily_registers ADD COLUMN supabase_id INTEGER',
+      );
+      await db.execute(
+        'ALTER TABLE monthly_budget ADD COLUMN is_synced INTEGER DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE monthly_budget ADD COLUMN supabase_id INTEGER',
+      );
     }
   }
 
@@ -227,7 +275,7 @@ class DatabaseHelper {
     if (res.isNotEmpty) {
       await db.update(
         'monthly_budget',
-        {'amount': amount},
+        {'amount': amount, 'is_synced': 0},
         where: 'user_id = ? AND month = ? AND year = ?',
         whereArgs: [userId, month, year],
       );
@@ -237,6 +285,7 @@ class DatabaseHelper {
         'month': month,
         'year': year,
         'amount': amount,
+        'is_synced': 0,
       });
     }
   }
@@ -252,5 +301,115 @@ class DatabaseHelper {
       return (res.first['amount'] as num).toDouble();
     }
     return 0.0;
+  }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedBudgets(int userId) async {
+    final db = await instance.database;
+    return await db.query(
+      'monthly_budget',
+      where: 'user_id = ? AND is_synced = 0',
+      whereArgs: [userId],
+    );
+  }
+
+  Future<void> markBudgetSynced(int id, int supabaseId) async {
+    final db = await instance.database;
+    await db.update(
+      'monthly_budget',
+      {'is_synced': 1, 'supabase_id': supabaseId},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  // --- DAILY REGISTER METHODS (CAJA) ---
+
+  Future<int> openDailyRegister(int userId, double initialAmount) async {
+    final db = await instance.database;
+    final now = DateTime.now().toIso8601String();
+    return await db.insert('daily_registers', {
+      'user_id': userId,
+      'opened_at': now,
+      'initial_amount': initialAmount,
+      'status': 'open',
+      'is_synced': 0,
+    });
+  }
+
+  Future<int> closeDailyRegister(int registerId, double finalAmount) async {
+    final db = await instance.database;
+    final now = DateTime.now().toIso8601String();
+    return await db.update(
+      'daily_registers',
+      {
+        'final_amount': finalAmount,
+        'closed_at': now,
+        'status': 'closed',
+        'is_synced': 0,
+      },
+      where: 'id = ?',
+      whereArgs: [registerId],
+    );
+  }
+
+  Future<Map<String, dynamic>?> getActiveDailyRegister(int userId) async {
+    final db = await instance.database;
+    final res = await db.query(
+      'daily_registers',
+      where: 'user_id = ? AND status = ?',
+      whereArgs: [userId, 'open'],
+      limit: 1,
+    );
+    return res.isNotEmpty ? res.first : null;
+  }
+
+  Future<double> getTotalExpensesInRegister(int registerId) async {
+    final db = await instance.database;
+    final res = await db.rawQuery(
+      'SELECT SUM(amount) as total FROM expenses WHERE daily_register_id = ? AND is_deleted = 0',
+      [registerId],
+    );
+    return (res.first['total'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  Future<List<Map<String, dynamic>>> getUnsyncedRegisters(int userId) async {
+    final db = await instance.database;
+    return await db.query(
+      'daily_registers',
+      where: 'user_id = ? AND is_synced = 0',
+      whereArgs: [userId],
+    );
+  }
+
+  Future<void> markRegisterSynced(int id, int supabaseId) async {
+    final db = await instance.database;
+    await db.update(
+      'daily_registers',
+      {'is_synced': 1, 'supabase_id': supabaseId},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<int?> getLocalRegisterIdBySupabaseId(int supabaseId) async {
+    final db = await instance.database;
+    final res = await db.query(
+      'daily_registers',
+      columns: ['id'],
+      where: 'supabase_id = ?',
+      whereArgs: [supabaseId],
+    );
+    return res.isNotEmpty ? res.first['id'] as int : null;
+  }
+
+  Future<int?> getSupabaseRegisterIdByLocalId(int localId) async {
+    final db = await instance.database;
+    final res = await db.query(
+      'daily_registers',
+      columns: ['supabase_id'],
+      where: 'id = ?',
+      whereArgs: [localId],
+    );
+    return res.isNotEmpty ? res.first['supabase_id'] as int? : null;
   }
 }
