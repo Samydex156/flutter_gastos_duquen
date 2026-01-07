@@ -22,6 +22,10 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) return;
 
     final db = await DatabaseHelper.instance.database;
+    if (db == null) {
+      _goToLogin();
+      return;
+    }
     final users = await db.query('usuarios_local');
 
     if (users.isNotEmpty) {

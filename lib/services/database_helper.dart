@@ -1,15 +1,18 @@
-import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+import 'supabase_service.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
+  final SupabaseService _supabaseService = SupabaseService();
 
   DatabaseHelper._init();
 
-  Future<Database> get database async {
+  Future<Database?> get database async {
+    if (kIsWeb) return null;
     if (_database != null) return _database!;
     _database = await _initDB('gastos_offline_v2.db');
     return _database!;
@@ -17,7 +20,7 @@ class DatabaseHelper {
 
   Future<Database> _initDB(String filePath) async {
     String path;
-    if (Platform.isWindows) {
+    if (!kIsWeb && Platform.isWindows) {
       // In Windows, when installed in Program Files, we must use a writable directory
       final String localAppData =
           Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path;
@@ -26,8 +29,13 @@ class DatabaseHelper {
       await Directory(dbDirectory).create(recursive: true);
       path = p.join(dbDirectory, filePath);
     } else {
-      final dbPath = await getDatabasesPath();
-      path = p.join(dbPath, filePath);
+      if (kIsWeb) {
+        // Basic web path for sqflite (though web support needs complex setup)
+        path = filePath;
+      } else {
+        final dbPath = await getDatabasesPath();
+        path = p.join(dbPath, filePath);
+      }
     }
 
     return await openDatabase(
@@ -138,34 +146,47 @@ class DatabaseHelper {
   }
 
   Future<void> saveLocalUser(int id, String email) async {
+    if (kIsWeb) return;
     final db = await instance.database;
-    await db.delete('usuarios_local');
+    await db!.delete('usuarios_local');
     await db.insert('usuarios_local', {'id': id, 'email': email});
   }
 
   Future<void> logoutLocalUser() async {
+    if (kIsWeb) return;
     final db = await instance.database;
-    await db.delete('usuarios_local');
+    await db!.delete('usuarios_local');
   }
 
   Future<int> insertExpense(Map<String, dynamic> row) async {
+    if (kIsWeb) {
+      return await _supabaseService.insertExpense(row);
+    }
     final db = await instance.database;
     // ensure default
     if (!row.containsKey('is_deleted')) {
       row['is_deleted'] = 0;
     }
-    return await db.insert('expenses', row);
+    return await db!.insert('expenses', row);
   }
 
   Future<int> updateExpense(int id, Map<String, dynamic> row) async {
+    if (kIsWeb) {
+      await _supabaseService.updateExpense(id, row);
+      return id;
+    }
     final db = await instance.database;
-    return await db.update('expenses', row, where: 'id = ?', whereArgs: [id]);
+    return await db!.update('expenses', row, where: 'id = ?', whereArgs: [id]);
   }
 
   // Soft delete for sync logic
   Future<int> softDeleteExpense(int id) async {
+    if (kIsWeb) {
+      await _supabaseService.deleteExpense(id);
+      return id;
+    }
     final db = await instance.database;
-    return await db.update(
+    return await db!.update(
       'expenses',
       {'is_deleted': 1, 'is_synced': 0},
       where: 'id = ?',
@@ -175,8 +196,12 @@ class DatabaseHelper {
 
   // Hard delete (used after sync confirms delete or for permanent removal)
   Future<int> deleteExpensePermanent(int id) async {
+    if (kIsWeb) {
+      await _supabaseService.deleteExpense(id);
+      return id;
+    }
     final db = await instance.database;
-    return await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
+    return await db!.delete('expenses', where: 'id = ?', whereArgs: [id]);
   }
 
   // Backwards compatibility shim if needed, but we prefer softDelete / deleteExpensePermanent
@@ -185,8 +210,9 @@ class DatabaseHelper {
   }
 
   Future<int> updateSupabaseId(int localId, int supabaseId) async {
+    if (kIsWeb) return localId;
     final db = await instance.database;
-    return await db.update(
+    return await db!.update(
       'expenses',
       {'supabase_id': supabaseId},
       where: 'id = ?',
@@ -195,8 +221,9 @@ class DatabaseHelper {
   }
 
   Future<bool> checkIfSupabaseIdExists(int supabaseId) async {
+    if (kIsWeb) return true;
     final db = await instance.database;
-    final res = await db.query(
+    final res = await db!.query(
       'expenses',
       where: 'supabase_id = ?',
       whereArgs: [supabaseId],
@@ -208,8 +235,11 @@ class DatabaseHelper {
     int userId,
     String date,
   ) async {
+    if (kIsWeb) {
+      return await _supabaseService.getExpenses(userId, date);
+    }
     final db = await instance.database;
-    return await db.query(
+    return await db!.query(
       'expenses',
       where: 'user_id = ? AND date = ? AND is_deleted = 0',
       whereArgs: [userId, date],
@@ -218,8 +248,9 @@ class DatabaseHelper {
   }
 
   Future<List<Map<String, dynamic>>> getUnsyncedExpenses(int userId) async {
+    if (kIsWeb) return [];
     final db = await instance.database;
-    return await db.query(
+    return await db!.query(
       'expenses',
       where: 'user_id = ? AND is_synced = 0 AND is_deleted = 0',
       whereArgs: [userId],
@@ -227,8 +258,9 @@ class DatabaseHelper {
   }
 
   Future<List<Map<String, dynamic>>> getExpensesToDelete(int userId) async {
+    if (kIsWeb) return [];
     final db = await instance.database;
-    return await db.query(
+    return await db!.query(
       'expenses',
       where: 'user_id = ? AND is_deleted = 1 AND is_synced = 0',
       whereArgs: [userId],
@@ -236,8 +268,9 @@ class DatabaseHelper {
   }
 
   Future<int> markAsSynced(int id) async {
+    if (kIsWeb) return id;
     final db = await instance.database;
-    return await db.update(
+    return await db!.update(
       'expenses',
       {'is_synced': 1},
       where: 'id = ?',
@@ -250,8 +283,15 @@ class DatabaseHelper {
     String startDate,
     String endDate,
   ) async {
+    if (kIsWeb) {
+      return await _supabaseService.getExpensesInDateRange(
+        userId,
+        startDate,
+        endDate,
+      );
+    }
     final db = await instance.database;
-    return await db.query(
+    return await db!.query(
       'expenses',
       where: 'user_id = ? AND date >= ? AND date <= ? AND is_deleted = 0',
       whereArgs: [userId, startDate, endDate],
@@ -266,8 +306,12 @@ class DatabaseHelper {
     int year,
     double amount,
   ) async {
+    if (kIsWeb) {
+      await _supabaseService.setMonthlyBudget(userId, month, year, amount);
+      return;
+    }
     final db = await instance.database;
-    final res = await db.query(
+    final res = await db!.query(
       'monthly_budget',
       where: 'user_id = ? AND month = ? AND year = ?',
       whereArgs: [userId, month, year],
@@ -291,8 +335,11 @@ class DatabaseHelper {
   }
 
   Future<double> getMonthlyBudget(int userId, int month, int year) async {
+    if (kIsWeb) {
+      return await _supabaseService.getMonthlyBudget(userId, month, year);
+    }
     final db = await instance.database;
-    final res = await db.query(
+    final res = await db!.query(
       'monthly_budget',
       where: 'user_id = ? AND month = ? AND year = ?',
       whereArgs: [userId, month, year],
@@ -304,8 +351,9 @@ class DatabaseHelper {
   }
 
   Future<List<Map<String, dynamic>>> getUnsyncedBudgets(int userId) async {
+    if (kIsWeb) return [];
     final db = await instance.database;
-    return await db.query(
+    return await db!.query(
       'monthly_budget',
       where: 'user_id = ? AND is_synced = 0',
       whereArgs: [userId],
@@ -313,8 +361,9 @@ class DatabaseHelper {
   }
 
   Future<void> markBudgetSynced(int id, int supabaseId) async {
+    if (kIsWeb) return;
     final db = await instance.database;
-    await db.update(
+    await db!.update(
       'monthly_budget',
       {'is_synced': 1, 'supabase_id': supabaseId},
       where: 'id = ?',
@@ -325,9 +374,12 @@ class DatabaseHelper {
   // --- DAILY REGISTER METHODS (CAJA) ---
 
   Future<int> openDailyRegister(int userId, double initialAmount) async {
+    if (kIsWeb) {
+      return await _supabaseService.openDailyRegister(userId, initialAmount);
+    }
     final db = await instance.database;
     final now = DateTime.now().toIso8601String();
-    return await db.insert('daily_registers', {
+    return await db!.insert('daily_registers', {
       'user_id': userId,
       'opened_at': now,
       'initial_amount': initialAmount,
@@ -337,9 +389,13 @@ class DatabaseHelper {
   }
 
   Future<int> closeDailyRegister(int registerId, double finalAmount) async {
+    if (kIsWeb) {
+      await _supabaseService.closeDailyRegister(registerId, finalAmount);
+      return registerId;
+    }
     final db = await instance.database;
     final now = DateTime.now().toIso8601String();
-    return await db.update(
+    return await db!.update(
       'daily_registers',
       {
         'final_amount': finalAmount,
@@ -353,8 +409,11 @@ class DatabaseHelper {
   }
 
   Future<Map<String, dynamic>?> getActiveDailyRegister(int userId) async {
+    if (kIsWeb) {
+      return await _supabaseService.getActiveDailyRegister(userId);
+    }
     final db = await instance.database;
-    final res = await db.query(
+    final res = await db!.query(
       'daily_registers',
       where: 'user_id = ? AND status = ?',
       whereArgs: [userId, 'open'],
@@ -364,8 +423,11 @@ class DatabaseHelper {
   }
 
   Future<double> getTotalExpensesInRegister(int registerId) async {
+    if (kIsWeb) {
+      return await _supabaseService.getTotalExpensesInRegister(registerId);
+    }
     final db = await instance.database;
-    final res = await db.rawQuery(
+    final res = await db!.rawQuery(
       'SELECT SUM(amount) as total FROM expenses WHERE daily_register_id = ? AND is_deleted = 0',
       [registerId],
     );
@@ -373,8 +435,9 @@ class DatabaseHelper {
   }
 
   Future<List<Map<String, dynamic>>> getUnsyncedRegisters(int userId) async {
+    if (kIsWeb) return [];
     final db = await instance.database;
-    return await db.query(
+    return await db!.query(
       'daily_registers',
       where: 'user_id = ? AND is_synced = 0',
       whereArgs: [userId],
@@ -382,8 +445,9 @@ class DatabaseHelper {
   }
 
   Future<void> markRegisterSynced(int id, int supabaseId) async {
+    if (kIsWeb) return;
     final db = await instance.database;
-    await db.update(
+    await db!.update(
       'daily_registers',
       {'is_synced': 1, 'supabase_id': supabaseId},
       where: 'id = ?',
@@ -392,8 +456,9 @@ class DatabaseHelper {
   }
 
   Future<int?> getLocalRegisterIdBySupabaseId(int supabaseId) async {
+    if (kIsWeb) return supabaseId;
     final db = await instance.database;
-    final res = await db.query(
+    final res = await db!.query(
       'daily_registers',
       columns: ['id'],
       where: 'supabase_id = ?',
@@ -403,8 +468,9 @@ class DatabaseHelper {
   }
 
   Future<int?> getSupabaseRegisterIdByLocalId(int localId) async {
+    if (kIsWeb) return localId;
     final db = await instance.database;
-    final res = await db.query(
+    final res = await db!.query(
       'daily_registers',
       columns: ['supabase_id'],
       where: 'id = ?',
